@@ -1,0 +1,39 @@
+{
+  "name": "book-ocr",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "test": "rm -rf .test-build && tsc -p tsconfig.test.json && node --test --test-reporter=spec \"./.test-build/test/**/*.test.js\"",
+    "clean": "rm -rf dist .test-build",
+    "cli": "node --env-file-if-exists=.env dist/cli/index.js",
+    "init-db": "node --env-file-if-exists=.env dist/cli/index.js init-db",
+    "ingest": "node --env-file-if-exists=.env dist/cli/index.js ingest",
+    "worker": "node --env-file-if-exists=.env dist/cli/index.js worker",
+    "search": "node --env-file-if-exists=.env dist/cli/index.js search",
+    "status": "node --env-file-if-exists=.env dist/cli/index.js status",
+    "queue": "node --env-file-if-exists=.env dist/cli/index.js queue",
+    "requeue": "node --env-file-if-exists=.env dist/cli/index.js requeue",
+    "rescue": "node --env-file-if-exists=.env dist/cli/index.js rescue",
+    "reindex": "node --env-file-if-exists=.env dist/cli/index.js reindex"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.126.0",
+    "@google/genai": "^2.23.0",
+    "openai": "^7.18.0",
+    "sharp": "^0.35.5",
+    "zod": "^4.6.6"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.1",
+    "typescript": "^7.0.2"
+  },
+  "bin": {
+    "book-ocr": "dist/cli/index.js"
+  }
+}
