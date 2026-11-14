@@ -135,6 +135,16 @@ test("ocr_queue: 存在しない source_image_id は外部キー違反", () => {
   assert.throws(() => db.prepare("INSERT INTO ocr_queue (source_image_id, image_path) VALUES (999, 'x')").run(), /FOREIGN KEY/);
 });
 
+test("ocr_log: OCR履歴のある画像は、そのままでは削除できない(外部キー。CASCADE ではない)", () => {
+  // Web UI 等で画像を削除するときは、履歴(ocr_log)や pages の扱いを明示的に決める必要がある。
+  const db = memDb();
+  const id = addImage(db);
+  db.prepare("INSERT INTO ocr_log (source_image_id, provider, model, outcome) VALUES (?, 'p', 'm', 'success')").run(id);
+  assert.throws(() => db.prepare("DELETE FROM source_images WHERE id = ?").run(id), /FOREIGN KEY/);
+  db.prepare("DELETE FROM ocr_log WHERE source_image_id = ?").run(id);
+  assert.doesNotThrow(() => db.prepare("DELETE FROM source_images WHERE id = ?").run(id));
+});
+
 // ---- トランザクション / BUSY --------------------------------------------
 
 test("inTransaction: 成功すればコミットされ、戻り値が返る", () => {

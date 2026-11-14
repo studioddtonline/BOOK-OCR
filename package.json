@@ -1,6 +1,6 @@
 {
   "name": "book-ocr",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -15,7 +15,6 @@
     "init-db": "node --env-file-if-exists=.env dist/cli/index.js init-db",
     "ingest": "node --env-file-if-exists=.env dist/cli/index.js ingest",
     "worker": "node --env-file-if-exists=.env dist/cli/index.js worker",
-    "search": "node --env-file-if-exists=.env dist/cli/index.js search",
     "status": "node --env-file-if-exists=.env dist/cli/index.js status",
     "queue": "node --env-file-if-exists=.env dist/cli/index.js queue",
     "requeue": "node --env-file-if-exists=.env dist/cli/index.js requeue",
@@ -31,6 +30,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.1",
+    "ocr-search": "https://github.com/studioddtonline/OCR-SEARCH/releases/download/v0.2.0/ocr-search-0.2.0.tgz",
     "typescript": "^7.0.2"
   },
   "bin": {

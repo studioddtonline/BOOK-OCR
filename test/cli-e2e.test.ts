@@ -179,9 +179,10 @@ test("ingest: 8桁ランダム付きの作業ファイル名はIDごとに衝突
   assert.equal(readdirSync(p.workDir).length, 3);
 });
 
-// ---- search --------------------------------------------------------------
+// ---- reindex -------------------------------------------------------------
 
-function seedSearch(dbPath: string) {
+/** reindex の検証用に、OCR済み4件 + OCR未完了1件を入れる。 */
+function seedOcrRows(dbPath: string) {
   const db = open(dbPath);
   const ins = db.prepare("INSERT INTO source_images (file_path, file_name, ocr_text, reviewed) VALUES (?, ?, ?, ?)");
   ins.run("本A", "1.webp", "吾輩は猫である。名前はまだ無い。", 0);
@@ -192,193 +193,29 @@ function seedSearch(dbPath: string) {
   db.close();
 }
 
-test("search: 3文字以上は FTS で検索し、ラベル・ファイル名・抜粋を表示する", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  seedSearch(p.dbPath);
-  const r = runCli("search", ["宮崎駿"], p.configPath);
-  assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /#3 本B \/ 3\.webp/);
-  assert.match(r.stdout, /#4 本B \/ 4\.webp/);
-  assert.match(r.stdout, /\[宮崎駿\]/);
-  assert.match(r.stdout, /2件ヒット/);
-});
-
-test("search: 1〜2文字は LIKE にフォールバックして検索できる", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  seedSearch(p.dbPath);
-  const r = runCli("search", ["猫"], p.configPath);
-  assert.match(r.stdout, /#1 /);
-  assert.match(r.stdout, /#2 \[レビュー済\] /);
-  assert.match(r.stdout, /2件ヒット/);
-});
-
-test("search: スペース区切りの複数語は1つのフレーズとして検索する", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  seedSearch(p.dbPath);
-  assert.match(runCli("search", ["吾輩は", "猫である"], p.configPath).stdout, /該当する結果はありません/);
-  const db = open(p.dbPath);
-  db.prepare("UPDATE source_images SET ocr_text = 'foo bar baz' WHERE id = 5").run();
-  db.close();
-  assert.match(runCli("search", ["foo", "bar"], p.configPath).stdout, /#5 /);
-});
-
-test("search: 該当なしのメッセージと --debug の案内", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  seedSearch(p.dbPath);
-  const r = runCli("search", ["存在しない言葉"], p.configPath);
-  assert.match(r.stdout, /該当する結果はありませんでした/);
-  assert.match(r.stdout, /--debug/);
-});
-
-test("search: 引数なしは使い方を表示して exit 1", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  const r = runCli("search", [], p.configPath);
-  assert.equal(r.status, 1);
-  assert.match(r.stderr, /使い方/);
-});
-
-test("search: 単独の -- は検索語に含めない", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  seedSearch(p.dbPath);
-  assert.match(runCli("search", ["--", "宮崎駿"], p.configPath).stdout, /2件ヒット/);
-});
-
-test("search --debug: 診断情報と検索方式を表示する", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  seedSearch(p.dbPath);
-  const r = runCli("search", ["猫", "--debug"], p.configPath);
-  assert.match(r.stdout, /--- 診断情報 ---/);
-  assert.match(r.stdout, /source_images 総数: 5/);
-  assert.match(r.stdout, /LIKE\(全件走査、3文字未満のため\)/);
-  const r2 = runCli("search", ["宮崎駿", "--debug"], p.configPath);
-  assert.match(r2.stdout, /FTS5\(trigram\)/);
-});
-
-test("search --debug: 検索語なしでも診断だけ表示して正常終了", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  const r = runCli("search", ["--debug"], p.configPath);
-  assert.equal(r.status, 0);
-  assert.match(r.stdout, /診断情報/);
-});
-
-test("search: 結果は最大50件", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  const db = open(p.dbPath);
-  const ins = db.prepare("INSERT INTO source_images (file_name, ocr_text) VALUES (?, ?)");
-  for (let i = 0; i < 60; i++) ins.run(`${i}.webp`, "共通のキーワード");
-  db.close();
-  assert.match(runCli("search", ["キーワード"], p.configPath).stdout, /50件ヒット/);
-  assert.match(runCli("search", ["共"], p.configPath).stdout, /50件ヒット/);
-});
-
-// ---- search-advanced -----------------------------------------------------
-
-test("search-advanced: --and / --not", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  seedSearch(p.dbPath);
-  const r = runCli("search", ["--and", "宮崎駿,監督", "--not", "アニメ"], p.configPath);
-  assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /#4 /);
-  assert.ok(!r.stdout.includes("#3 "));
-  assert.match(r.stdout, /1件ヒット/);
-});
-
-test("search-advanced: --or と 短い語", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  seedSearch(p.dbPath);
-  const r = runCli("search", ["--or", "随筆,頓と"], p.configPath);
-  assert.match(r.stdout, /#2 /);
-  assert.match(r.stdout, /#4 /);
-  assert.match(r.stdout, /2件ヒット/);
-});
-
-test("search-advanced: --query に入れ子のJSONを渡せる", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  seedSearch(p.dbPath);
-  const q = {
-    type: "or",
-    nodes: [
-      { type: "and", nodes: [{ type: "term", value: "宮崎駿" }, { type: "not", node: { type: "term", value: "随筆" } }] },
-      { type: "term", value: "吾輩は" },
-    ],
-  };
-  const r = runCli("search", ["--query", JSON.stringify(q)], p.configPath);
-  assert.match(r.stdout, /#1 /);
-  assert.match(r.stdout, /#3 /);
-  assert.match(r.stdout, /2件ヒット/);
-});
-
-test("search-advanced: 不正なJSON・不正な形式・条件なしは exit 1", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  const bad = runCli("search", ["--query", "{oops"], p.configPath);
-  assert.equal(bad.status, 1);
-  assert.match(bad.stderr, /JSONが不正/);
-  const shape = runCli("search", ["--query", '{"type":"and","nodes":[]}'], p.configPath);
-  assert.equal(shape.status, 1);
-  assert.match(shape.stderr, /形式と一致しません/);
-  const blank = runCli("search", ["--and", " , "], p.configPath);
-  assert.equal(blank.status, 1);
-  assert.match(blank.stderr, /検索条件が指定されていません/);
-  const missing = runCli("search", ["--query"], p.configPath);
-  assert.equal(missing.status, 1);
-});
-
-test("search: --help は詳細検索の書き方を含む使い方を表示する", (t) => {
-  const p = makeProject(t);
-  const r = runCli("search", ["--help"], p.configPath);
-  assert.equal(r.status, 0);
-  assert.match(r.stdout, /使い方/);
-  assert.match(r.stdout, /--and/);
-  assert.match(r.stdout, /--query/);
-});
-
-test("search-advanced --debug: 解釈したクエリ木と組み立てたSQLを表示", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  seedSearch(p.dbPath);
-  const r = runCli("search", ["--and", "宮崎駿", "--debug"], p.configPath);
-  assert.match(r.stdout, /解釈したクエリ木/);
-  assert.match(r.stdout, /組み立てたSQL/);
-  assert.match(r.stdout, /パラメータ/);
-});
-
-test("search: OCR未完了(ocr_textがNULL)の行を NOT で拾ってもクラッシュせず、結果にも出さない", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  seedSearch(p.dbPath);
-  const r = runCli("search", ["--not", "宮崎駿"], p.configPath);
-  assert.equal(r.status, 0, r.stderr);
-  assert.ok(!r.stdout.includes("#5 "), "OCR未完了の行は結果に出さない");
-  assert.match(r.stdout, /#1 /);
-});
-
-// ---- reindex -------------------------------------------------------------
+/** 全文検索の索引(images_fts)を、フレーズで直接引いたときのヒット数。検索そのものは ocr-search の責務。 */
+function ftsHits(dbPath: string, phrase: string): number {
+  const db = open(dbPath);
+  try {
+    return rows(db, "SELECT rowid FROM images_fts WHERE images_fts MATCH ?", `"${phrase}"`).length;
+  } finally {
+    db.close();
+  }
+}
 
 test("reindex: 壊れた索引を作り直し、前後のトライグラム数を表示する", (t) => {
   const p = makeProject(t);
   runCli("init-db", [], p.configPath);
-  seedSearch(p.dbPath);
+  seedOcrRows(p.dbPath);
+  assert.equal(ftsHits(p.dbPath, "宮崎駿"), 2, "トリガーで索引済み");
   const db = open(p.dbPath);
   db.exec(`INSERT INTO images_fts(images_fts) VALUES ('delete-all')`);
   db.close();
-  assert.match(runCli("search", ["宮崎駿"], p.configPath).stdout, /該当する結果はありません/);
+  assert.equal(ftsHits(p.dbPath, "宮崎駿"), 0, "索引を壊した");
   const r = runCli("reindex", [], p.configPath);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /索引済みトライグラム数: 0 -> \d+ \(source_images総数: 5\)/);
-  assert.match(runCli("search", ["宮崎駿"], p.configPath).stdout, /2件ヒット/);
+  assert.equal(ftsHits(p.dbPath, "宮崎駿"), 2, "再構築で検索できる");
 });
 
 // ---- 統合CLI(book-ocr) ---------------------------------------------------
@@ -391,7 +228,7 @@ test("book-ocr: 引数なし・help はコマンド一覧を表示する", (t) =
       encoding: "utf-8",
     });
     assert.equal(r.status, 0);
-    for (const c of ["init-db", "ingest", "worker", "search", "status", "queue", "requeue", "rescue", "reindex"]) {
+    for (const c of ["init-db", "ingest", "worker", "status", "queue", "requeue", "rescue", "reindex"]) {
       assert.ok(r.stdout.includes(c), `${c} が一覧にある`);
     }
   }
@@ -405,9 +242,19 @@ test("book-ocr: 不明なコマンドは一覧つきのエラー(exit 1)", (t) =
   assert.match(r.stderr, /ingest/);
 });
 
+test("book-ocr search: 廃止の案内(ocr-search への移行先)を出して exit 1。コマンド一覧には出ない", (t) => {
+  const p = makeProject(t);
+  const r = runCli("search", ["猫"], p.configPath);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /search コマンドは v0\.5\.0 で廃止/);
+  assert.match(r.stderr, /ocr-search search --database=/);
+  assert.match(r.stderr, /search-japanese/);
+  assert.ok(!r.stderr.includes("不明なコマンドです"), "一般の不明コマンドとは区別する");
+});
+
 test("全コマンドで --help が使え、exit 0 で使い方を表示する", (t) => {
   const p = makeProject(t);
-  for (const c of ["init-db", "ingest", "worker", "search", "status", "queue", "requeue", "rescue", "reindex"]) {
+  for (const c of ["init-db", "ingest", "worker", "status", "queue", "requeue", "rescue", "reindex"]) {
     const r = runCli(c, ["--help"], p.configPath);
     assert.equal(r.status, 0, `${c}: ${r.stderr}`);
     assert.match(r.stdout, /使い方/, c);
@@ -416,7 +263,7 @@ test("全コマンドで --help が使え、exit 0 で使い方を表示する",
 
 test("全コマンドで、未知のオプションは使い方つきで exit 1", (t) => {
   const p = makeProject(t);
-  for (const c of ["init-db", "ingest", "worker", "search", "status", "queue", "requeue", "rescue", "reindex"]) {
+  for (const c of ["init-db", "ingest", "worker", "status", "queue", "requeue", "rescue", "reindex"]) {
     const r = runCli(c, ["--no-such-option"], p.configPath);
     assert.equal(r.status, 1, c);
     assert.match(r.stderr, /使い方/, c);
@@ -430,24 +277,6 @@ test("init-db: スキーマ番号が最新になり、status で確認できる"
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /スキーマ番号 (\d+) \/ 最新 \1/);
   assert.match(r.stdout, /source_images 総数: 0/);
-});
-
-test("search: 検索語と構造化フラグの同時指定、--query と --and の同時指定はエラー", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  assert.match(runCli("search", ["語", "--and", "x"], p.configPath).stderr, /同時に指定できません/);
-  assert.match(runCli("search", ["--query", '{"type":"term","value":"x"}', "--and", "y"], p.configPath).stderr, /同時に指定できません/);
-});
-
-test("search --limit: 件数を絞れる。不正な値はエラー", (t) => {
-  const p = makeProject(t);
-  runCli("init-db", [], p.configPath);
-  seedSearch(p.dbPath);
-  assert.match(runCli("search", ["宮崎駿", "--limit", "1"], p.configPath).stdout, /1件ヒット/);
-  for (const bad of ["0", "abc", "-3", "1.5"]) {
-    const r = runCli("search", ["宮崎駿", "--limit", bad], p.configPath);
-    assert.equal(r.status, 1, bad);
-  }
 });
 
 // ---- status / queue / requeue / rescue ----------------------------------

@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.5.0 — 全文検索を ocr-search へ分離
+
+全文検索を、別パッケージ [ocr-search](https://github.com/studioddtonline/OCR-SEARCH)(v0.2.0)へ移しました。
+book-ocr は、DBのスキーマ・索引(`images_fts`)・書き込みを持ち、検索は読み手(ocr-mcp-server、Web UI)に任せます。
+**DBのスキーマは変わりません(マイグレーションなし)。**
+
+### 利用者から見える変更
+
+- **`search` コマンド(`npm run search`)を廃止。** `book-ocr search` は、移行先(`ocr-search search` / `search-japanese`)を案内して
+  終了コード1で終わります。この案内は、移行が済んだら削除して構いません(`src/cli/index.ts` の `RETIRED_SEARCH_MESSAGE`)。
+- **機能差**: ocr-search の CLI は、結果をJSONで出力します。旧 `search` にあった人が読む表示と、`--and` / `--or` / `--not` の
+  カジュアルなフラグはありません(検索木は `--query` にJSONで渡します)。
+- `status` の診断は、そのまま使えます(実装を `src/search/` から `src/db/diagnostics.ts` へ移しました)。
+- Node の下限は変わりません。
+
+### 契約テスト(新規 `test/ocr-search-contract.test.ts`)
+
+book-ocr の書き込み経路(`completeQueueItem` など)で書いたDBを、実物の ocr-search で読んで検証します。
+
+- ocr-search の互換性検査(本番用と、trigram の厳格版)に通ること。
+- 要求される列の存在、`AUTOINCREMENT`、同期トリガー3つ(ocr-search の検証はトリガーを見ないので、ここで守る)。
+- OCR成功・人手の更新・削除・`reindex` の後の検索結果、`reviewed` の解釈(0だけが未レビュー)、`label` の完全一致、`afterId` のページング。
+- `search.close()` が、呼び出し側のDB接続を閉じないこと。
+
+### 依存関係
+
+- `ocr-search` を devDependency に追加。GitHub Releases の tgz の URL を `package.json` に直接書き、`package-lock.json` に integrity を記録
+  (ocr-mcp-server と同じ取り込み方。npm のレジストリには公開しません)。`.npmrc` に `allow-remote=root`。
+
+### 内部の構造
+
+- `src/search/`(`query` / `service` / `snippet` / `format`)と、`src/cli/commands/search.ts` を削除。関連テスト(49件)も削除。
+- テストは 330件 → 298件(検索のテスト約50件を削除、契約テストなど17件を追加)。
+
+### 補足(既存の性質を、テストで明文化)
+
+- `ocr_log` を持つ画像は、外部キーのため、そのままでは削除できません。画像を削除する機能(Web UI等)を作るときは、履歴の扱いを決めてください。
+
 ## 0.4.0 — リファクタリング
 
 挙動を変えない構造の整理が中心です。変更点のうち、**利用者から見える違い**を先に挙げます。

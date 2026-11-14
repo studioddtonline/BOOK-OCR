@@ -1,7 +1,8 @@
 # book-ocr
 
 書籍・雑誌のスキャン画像を、AI(Gemini / OpenAI / Anthropic)でOCRし、
-SQLite + FTS5(trigram)で全文検索できるようにするツールです。GPUは不要です。
+SQLite(FTS5 trigram の全文検索用索引つき)に格納するツールです。GPUは不要です。
+全文検索そのものは、別パッケージ [OCR-SEARCH](https://github.com/studioddtonline/OCR-SEARCH)(`ocr-search`)が担います。
 
 ## 前提
 
@@ -27,12 +28,13 @@ npm run init-db
 |---|---|
 | `ingest [--label 名前]` | `watchDir` の画像を取り込み、OCR待ちキューに登録する |
 | `worker` | キューを順に処理し続ける(常駐) |
-| `search <語> / --and/--or/--not/--query` | OCR結果の全文検索 |
 | `status` | DBの状態と、`error` の行を表示する |
 | `queue list / queue retry` | キューの確認、失敗した行の再試行 |
 | `requeue <id> --image <画像>` | 既存の画像を再OCRのためにキューへ載せる |
 | `rescue apply` | DB保存に失敗して退避された結果を、DBに反映する |
-| `reindex` | 全文検索の索引を作り直す |
+| `reindex` | 全文検索の索引(`images_fts`)を作り直す |
+
+> **v0.5.0 で `search` コマンドは廃止しました。** 全文検索は別パッケージ `ocr-search` に移りました(「検索する」の章)。
 | `init-db` | DBの作成・マイグレーション適用(他のコマンドも自動で行う) |
 
 `book-ocr <コマンド> --help` で、各コマンドの詳しい使い方が表示されます。
@@ -216,27 +218,29 @@ npm run requeue -- 1536 --image /path/to/original/110-111.webp
   `ocr_log` には、使った**プロンプトのハッシュ**(`prompt_hash`)と、SDKに送った **options**(`request_options`)も
   記録されるので、プロンプトやモデル設定を変えた後で「どの出力がどの条件で作られたか」を区別できます。
 
-### 検索する(search)
+### 検索する(ocr-search)
+
+全文検索は、v0.5.0 で別パッケージ **[ocr-search](https://github.com/studioddtonline/OCR-SEARCH)** に移りました
+(ocr-mcp-server と、Web UI も同じものを使います)。book-ocr は、DBと索引(`images_fts`)を作り、正しく保つところまでを担当します。
+
+検索の仕様(語の扱い、AND/OR/NOT、ページング、日本語検索)は、ocr-search のREADMEを参照してください。
+このリポジトリには、動作確認用の入口として、`ocr-search` の CLI が devDependency として入っています。
 
 ```bash
-npm run search -- 検索したい語句
+# 標準検索。--query は、素の検索語か、検索木のJSON。結果はJSONで出力されます
+npx ocr-search search --database=<dbPathの絶対パス> --query="検索語"
+npx ocr-search search --database=<dbPathの絶対パス> --query='{"type":"and","nodes":[{"type":"term","value":"宮崎駿"},{"type":"not","node":{"type":"term","value":"アニメ"}}]}'
+
+# 日本語(形態素)検索。事前に索引の作成と拡張のインストールが必要(ocr-search のREADME参照)
+npx ocr-search search-japanese --database=... --index=... --extension=... --query="日本語"
 ```
 
-検索は完全一致の部分文字列検索です(形態素解析はしていません)。結果は
-`#id [レビュー済] <file_path(本の名前)> / <file_name>` と、該当箇所の抜粋で表示されます(既定で最大50件。`--limit N` で変更)。
+旧 `book-ocr search` にあった、人が読む表示と `--and` / `--or` / `--not` のカジュアルなフラグは、ocr-search の CLI にはありません。
+`book-ocr search` と打つと、移行先を案内して終了します。
 
-- **3文字以上**: FTS5(trigram)の索引を使います(関連度順)。
-- **1〜2文字**: trigramは3文字未満から索引を作れず常に0件になるため、自動的に `LIKE` の全件走査にフォールバックします
-  (数千件規模なら速度は問題になりません)。
-- スペース区切りで複数の語を渡すと、スペースも含めた**1つのフレーズ**として検索します(AND検索ではありません)。
-  AND/OR/NOTは下の詳細検索を使ってください。
-- 検索語が `-` で始まるときは、`--` の後に書きます(`npm run search -- -- -foo`)。
-- OCR未完了(`ocr_text` がNULL)の行は、検索結果に含まれません。
-
-0件のときは、`--debug` を付けると、`source_images` の件数・OCR済み件数・レビュー済み件数・キューの内訳、
-**実際に索引済みのトライグラム数**(`fts5vocab` で検証。外部contentテーブルの素朴な `COUNT(*)` は
-実際の索引状態を反映しないため)、実際に使われた検索語と検索方式が表示されます。
-検索は `ocr_text` と索引だけを見るので、`books` / `pages` の書誌情報が未入力でも検索には影響しません。
+検索結果が0件のときに、**索引が空なのか、そもそもOCRが済んでいないのか**を調べるには、`status` を使います。
+`source_images` の件数・OCR済み件数・レビュー済み件数・キューの内訳と、**実際に索引済みのトライグラム数**
+(`fts5vocab` で検証。外部contentテーブルの素朴な `COUNT(*)` は実際の索引状態を反映しないため)を表示します。
 
 索引がずれたと疑われる場合は、いつでも再構築できます(データは失われません。実行中は書き込みロックを取るので、
 MCPサーバ等の書き込みが一時的に待たされます)。
@@ -244,23 +248,6 @@ MCPサーバ等の書き込みが一時的に待たされます)。
 ```bash
 npm run reindex
 ```
-
-### AND/OR/NOTを使った詳細検索
-
-```bash
-# カジュアルな書き方(カンマ区切り): 宮崎と監督を両方含み、アニメは含まない
-npm run search -- --and "宮崎,監督" --not "アニメ"
-
-# 生のJSON(AND/OR/NOTを任意の深さでネストできる。Web UIのバックエンドが組み立てて渡す形式)
-npm run search -- --query '{"type":"or","nodes":[...]}'
-
-npm run search -- --help   # 書き方の詳細
-```
-
-内部では `src/search/query.ts` がクエリ木の各語を、3文字以上なら索引を使うサブクエリ、3文字未満なら `LIKE` に変換し、
-組み立てはSQLの `AND` / `OR` / `NOT` で行います(FTS5自身の `NOT` は2項演算子限定などの制約があるため使いません)。
-`--query` のJSONは `QueryNode` 型そのものなので、Web UI等を作る際は同じオブジェクトを `searchImages()`
-(`src/search/service.ts`)に渡せます。
 
 ### DB Browser for SQLite で開いているとき
 
@@ -315,15 +302,14 @@ npm run typecheck   # 型チェックのみ
 ```
 src/
   cli/              CLIの入口(index.ts)と各サブコマンド(commands/)。引数解析と表示だけで、処理本体は持たない
-  db/               DB層。connection / migrations / queue / source-images / ocr-log / usage / fts
+  db/               DB層。connection / migrations / queue / source-images / ocr-log / usage / fts / diagnostics
   providers/        AIプロバイダ。base(共通)・gemini/openai/anthropic(各社アダプタ)・registry(生成)・
                     errors(エラー分類)・health(休止)・pool(選択・呼び出し・状態更新)
   worker/           OCRワーカー。worker(主ループ)・failure-policy(エラーの扱い表)・preflight・save・report
-  search/           検索。query(検索木→SQL)・service(searchImages)・snippet・format・diagnostics
   ingest/           取り込み(ingest)と画像のリサイズ(resize)
   rescue.ts         rescue.jsonl の退避と反映
   config.ts, errors.ts, image-file.ts, ocr/prompt.ts
-test/               テスト(src の各モジュールに対応。cli-e2e は別プロセスでCLIを実行)
+test/               テスト(src の各モジュールに対応。cli-e2e は別プロセスでCLIを実行。ocr-search-contract は検索パッケージとの契約)
 ```
 
 - **ベンダーを追加する**: `providers/` にアダプタを1つ書き(`BaseProvider` を継承し、`request()` だけ実装)、
@@ -332,18 +318,25 @@ test/               テスト(src の各モジュールに対応。cli-e2e は�
   `providers/pool.ts` の `attempt()` にあります。
 - **スキーマを変える**: `db/migrations.ts` の `MIGRATIONS` に、番号つきの `up` を追加します(`PRAGMA user_version` で管理。
   各 `up` は何度実行しても安全に書き、`source_images` / `images_fts` / トリガーには触れないこと。次章)。
+- **ocr-search との契約テスト**: `test/ocr-search-contract.test.ts` が、book-ocr が書いたDBを、実物の `ocr-search` で読めること
+  (互換性検査・trigram・トリガーによる索引の同期・`reviewed` の解釈・`label` の絞り込み・`afterId` のページング)を検証します。
+  `ocr-search` は devDependency で、**リリースの tgz のURL**(GitHub Releases)を `package.json` に直接書き、`package-lock.json` に
+  integrity を記録します(npm のレジストリには公開しません)。npm 12 はリモートの tgz を既定で拒否するため、`.npmrc` に
+  `allow-remote=root` を置いています。バージョンを上げるときは、`package.json` の URL の `v0.2.0` / `0.2.0` を書き換えて `npm install` します。
 
 ## 6. 他のツール(MCPサーバ等)と同じDBを使うとき
 
-このDBは、別プロジェクトの **ocr-mcp-server** からも読み書きされます(`ocr_text` の編集と、編集履歴 `mcp_ocr_edit_history` の記録)。
+このDBは、別プロジェクトの **ocr-mcp-server** からも読み書きされ(`ocr_text` の編集と、編集履歴 `mcp_ocr_edit_history` の記録)、
+全文検索は **ocr-search** が読みます(ocr-mcp-server と、Web UI が使う)。
 **このプロジェクトが守る約束**は次のとおりです(`db/migrations.ts` の先頭コメントと、`test/db-schema.test.ts` の「契約」テストにも書いてあります)。
 
 - **`mcp_ocr_edit_history` を作らない・触らない。** MCPサーバが自分で作って管理するテーブルです(`init-db`・マイグレーション・`reindex` は一切触れません)。
 - **`source_images.id` を変えない。** 履歴は `source_image_id` を**外部キー無しの素の整数**で持っているため、`id` が変わると
-  履歴が黙って孤児になります。
-- **MCPサーバが検証・依存している形を維持する。** `source_images` の5列(`id` / `file_path` / `file_name` / `ocr_text` / `reviewed`)、
+  履歴が黙って孤児になります。そのため `source_images` は `AUTOINCREMENT` で、削除した `id` は再利用されません。
+- **MCPサーバと ocr-search が検証・依存している形を維持する。** `source_images` の5列(`id` / `file_path` / `file_name` / `ocr_text` / `reviewed`)、
   `images_fts` がFTS5(trigram)で `MATCH` できること、`ocr_text` の更新トリガー(`source_images_ai` / `_ad` / `_au`)。
-  MCPサーバは索引を直接触らず、トリガーに任せています。スキーマを変えるときは、相手側と合わせてください。
+  MCPサーバと ocr-search は索引を直接触らず、トリガーに任せています。スキーマを変えるときは、相手側と合わせてください。
+  これらは `test/db-schema.test.ts` と `test/ocr-search-contract.test.ts` が守っています(ocr-search の検証はトリガーを見ないので、トリガーはここで守ります)。
 - **`reviewed` は「0 = 未レビュー、0以外 = レビュー済み」。** workerも、MCPサーバと同じく0以外を上書きしません。
 
 **運用上の注意**:
@@ -356,6 +349,8 @@ test/               テスト(src の各モジュールに対応。cli-e2e は�
 - **DBファイルのバックアップは、worker と MCPサーバの両方を止めてから行ってください。**
   稼働中の書き込みがあるとファイルコピーが不完全になる可能性があります。
 - **`source_images` の行を削除しても、`mcp_ocr_edit_history` の履歴は自動では消えず、孤児として残ります**(外部キーが無いため)。
+- **OCR履歴(`ocr_log`)のある画像は、外部キーのため、そのままでは削除できません**(`ON DELETE CASCADE` ではありません)。
+  画像を削除する機能を作るときは、履歴(`ocr_log`)や `pages` の扱いを明示的に決めてください(`test/db-schema.test.ts` に挙動を固定してあります)。
 - **`INSERT OR REPLACE` / `REPLACE` で `source_images` を書き換えない**でください。`DELETE` トリガーが発火せず、索引がずれます
   (ずれたら `npm run reindex`)。通常の `INSERT` / `UPDATE` / `DELETE` はすべてトリガーを通ります。
 - workerの再OCRが `ocr_text` を上書きするとき(`reviewed` が0の行のみ)、**上書き前の本文を保存する仕組みはありません。**

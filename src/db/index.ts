@@ -6,6 +6,7 @@ export type { OcrLogOutcome, QueueRow, QueueStatus, SourceImageRow } from "./typ
 export { insertOcrLog, type OcrLogEntry } from "./ocr-log.js";
 export { getImageStats, getSourceImage, insertSourceImage, type ImageStats } from "./source-images.js";
 export { getFtsIndexedTermCount, rebuildFtsIndex } from "./fts.js";
+export { collectDiagnostics, printDiagnostics, type Diagnostics } from "./diagnostics.js";
 export { getProviderUsageToday, isValidTimeZone, markProviderExhausted, recordProviderRequest, usageDate } from "./usage.js";
 export {
   claimNextQueueItem,

@@ -1,7 +1,6 @@
 import { parseArgs } from "node:util";
 import { loadConfig } from "../../config.js";
-import { LATEST_SCHEMA_VERSION, getUserVersion, listErrorQueueItems, openDb } from "../../db/index.js";
-import { printDiagnostics } from "../../search/diagnostics.js";
+import { LATEST_SCHEMA_VERSION, getUserVersion, listErrorQueueItems, openDb, printDiagnostics } from "../../db/index.js";
 import { withUsage } from "../args.js";
 import type { Command } from "../types.js";
 
